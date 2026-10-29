@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cert.pem surgery — two roots Apple still ships</title>
+<meta name="description" content="Remove two root CAs from Apple's OpenSSL trust bundle (/etc/ssl/cert.pem) on macOS, in one command, reversibly.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔒</text></svg>">
+<style>
+  :root{
+    --bg:#0d1117; --bg2:#111823; --line:#243040; --fg:#d6dde7; --dim:#7c8b9e;
+    --amber:#f0b429; --green:#3fb950; --red:#f85149; --blue:#58a6ff;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.65 var(--mono);
+    -webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(900px 420px at 50% -160px,#1b2634 0%,transparent 70%);
+  }
+  .wrap{max-width:900px;margin:0 auto;padding:0 22px 90px}
+  a{color:var(--blue);text-decoration:none;border-bottom:1px solid rgba(88,166,255,.28)}
+  a:hover{border-bottom-color:var(--blue)}
+  header{padding:64px 0 34px;border-bottom:1px solid var(--line)}
+  .kicker{color:var(--amber);font-size:12.5px;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:clamp(27px,4.6vw,42px);line-height:1.15;margin:14px 0 16px;letter-spacing:-.02em;font-weight:700}
+  h1 span{color:var(--amber)}
+  .lede{color:var(--dim);font-size:16.5px;max-width:66ch}
+  h2{font-size:19px;margin:52px 0 6px;letter-spacing:-.01em}
+  h2::before{content:"$ ";color:var(--green);opacity:.75}
+  h3{font-size:14.5px;color:var(--dim);font-weight:400;margin:0 0 14px;letter-spacing:.02em}
+  p{max-width:70ch}
+  code{background:#1a2330;padding:1.5px 5px;border-radius:4px;font-size:.92em;color:#c9d6e6}
+  pre{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:15px 17px;overflow-x:auto;
+      font-size:13.2px;line-height:1.6;margin:12px 0;position:relative}
+  pre code{background:none;padding:0;color:#cbd7e5}
+  .cmd{border-color:#2f4257;background:linear-gradient(180deg,#131c28,#0f1620)}
+  .cmd .prompt{color:var(--green);user-select:none}
+  .copy{position:absolute;top:9px;right:9px;background:#1d2836;color:var(--dim);border:1px solid var(--line);
+        border-radius:6px;font:11px/1 var(--mono);padding:6px 9px;cursor:pointer;letter-spacing:.06em;text-transform:uppercase}
+  .copy:hover{color:var(--fg);border-color:#3b4d63}
+  .copy.done{color:var(--green);border-color:var(--green)}
+  .note{border-left:2px solid var(--amber);padding:2px 0 2px 16px;color:var(--dim);margin:18px 0}
+  .note strong{color:var(--fg);font-weight:600}
+  .grid{display:grid;gap:14px;grid-template-columns:1fr 1fr;margin:18px 0}
+  @media(max-width:680px){.grid{grid-template-columns:1fr}}
+  .card{border:1px solid var(--line);border-radius:9px;padding:15px 17px;background:#101822}
+  .card h4{margin:0 0 10px;font-size:14px;color:var(--amber);font-weight:600}
+  .card dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12.6px}
+  .card dt{color:var(--dim);white-space:nowrap}
+  .card dd{margin:0;word-break:break-all}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:16px 0}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:400;font-size:11.5px;text-transform:uppercase;letter-spacing:.09em}
+  .yes{color:var(--amber)}
+  .no{color:var(--green)}
+  .ok{color:var(--green)} .bad{color:var(--red)}
+  ol.steps{counter-reset:s;list-style:none;padding:0}
+  ol.steps li{counter-increment:s;position:relative;padding-left:38px;margin:0 0 15px}
+  ol.steps li::before{content:counter(s);position:absolute;left:0;top:1px;width:23px;height:23px;border-radius:50%;
+    border:1px solid var(--line);color:var(--amber);font-size:12px;display:flex;align-items:center;justify-content:center}
+  footer{margin-top:70px;padding-top:22px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px;
+         display:flex;flex-wrap:wrap;gap:8px 18px;justify-content:space-between}
+  .badge{display:inline-block;font-size:11px;border:1px solid var(--line);border-radius:99px;padding:2px 9px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">macOS · /etc/ssl/cert.pem</div>
+  <h1>Apple still ships two roots<br>that <span>should not be trusted</span>.</h1>
+  <p class="lede">
+    macOS keeps a separate OpenSSL bundle at <code>/etc/ssl/cert.pem</code>, used by <code>curl</code>,
+    <code>git</code>, Python, Ruby, and anything else that reads a CA file instead of the Keychain.
+    Two root CAs are still in it. This removes them — in one command, with a verified backup and a one-command undo.
+  </p>
+</header>
+
+<pre class="cmd"><button class="copy" data-copy="curl -fsSL https://surak.github.io/macos-root-ca-cleanup/fix.sh | bash">copy</button><code><span class="prompt">$</span> curl -fsSL https://surak.github.io/macos-root-ca-cleanup/fix.sh | bash</code></pre>
+
+<p class="note"><strong>It asks for your sudo password</strong> and writes exactly one file. Read
+<a href="https://github.com/surak/macos-root-ca-cleanup/blob/main/fix.sh">fix.sh</a> first if you like — it is 250 lines, mostly checks.</p>
+
+<h2>the two certificates</h2>
+<h3>Pulled from the bundle on this Mac, not from a blog post.</h3>
+
+<div class="grid">
+  <div class="card">
+    <h4>emSign ECC Root CA - G3</h4>
+    <dl>
+      <dt>subject</dt><dd>/C=IN/OU=emSign PKI/O=eMudhra Technologies Limited/CN=emSign ECC Root CA - G3</dd>
+      <dt>key</dt><dd>EC P-384 · ecdsa-with-SHA384</dd>
+      <dt>valid</dt><dd>2018-02-18 → 2043-02-18</dd>
+      <dt>serial</dt><dd>3C:F6:07:A9:68:70:0E:DA:8B:84</dd>
+      <dt>sha256</dt><dd>86:A1:EC:BA:08:9C:4A:8D:3B:BE:27:34:C6:12:BA:34:1D:81:3E:04:3C:F9:E8:A8:62:CD:5C:57:A3:6B:BE:6B</dd>
+      <dt>CRL / OCSP</dt><dd>none published</dd>
+    </dl>
+  </div>
+  <div class="card">
+    <h4>AAA Certificate Services</h4>
+    <dl>
+      <dt>subject</dt><dd>/C=GB/ST=Greater Manchester/L=Salford/O=Comodo CA Limited/CN=AAA Certificate Services</dd>
+      <dt>key</dt><dd>RSA 2048 · <span class="yes">sha1WithRSA</span></dd>
+      <dt>valid</dt><dd>2004-01-01 → 2028-12-31</dd>
+      <dt>serial</dt><dd>01</dd>
+      <dt>sha256</dt><dd>D7:A7:A0:FB:5D:7E:27:31:D7:71:E9:48:4E:BC:DE:F7:1D:5F:0C:3E:0A:29:48:78:2B:C8:3E:E0:EA:69:9E:F4</dd>
+      <dt>CRL</dt><dd>crl.comodoca.com (current, 0 entries)</dd>
+    </dl>
+  </div>
+</div>
+
+<p>Both are self-signed roots: the signature on each one was made by its own key. Nothing above them vouches for them —
+they are trusted because they are in the bundle, and for no other reason. One of them, AAA Certificate Services,
+still carries a <span class="yes">SHA-1</span> self-signature from 2004.</p>
+
+<h2>what it does</h2>
+<ol class="steps">
+  <li><strong>Checks the ground first.</strong> Confirms macOS, finds the bundle, works out how many certificates are in it.</li>
+  <li><strong>Identifies before deleting.</strong> Locates each block by its subject line, then compares the certificate's
+      SHA-256 fingerprint to a pinned value. Same name but different certificate? It stops and writes nothing.</li>
+  <li><strong>Builds the new bundle in a temp directory</strong> — never in place — and validates the result:
+      the count must drop by exactly the number of blocks removed, and OpenSSL must be able to parse every
+      remaining certificate.</li>
+  <li><strong>Keeps the original</strong> at <code>/etc/ssl/cert.pem.orig</code> (only if that file does not already exist,
+      so a good backup is never overwritten).</li>
+  <li><strong>Installs atomically.</strong> The new bundle is written beside the target and renamed into place, so an
+      interrupted run cannot leave you with a half-written CA store. Then it re-runs the test.</li>
+</ol>
+
+<h2>before / after</h2>
+<table>
+  <tr><th>&nbsp;</th><th>certificates</th><th>lines</th><th>sha256</th></tr>
+  <tr><td>Apple's bundle</td><td class="yes">128</td><td>6263</td><td><code>9dae8d76…b994</code></td></tr>
+  <tr><td>after the fix</td><td class="no">126</td><td>6175</td><td><code>6bddc1e2…7083</code></td></tr>
+</table>
+<p>Two blocks, 88 lines, nothing else touched — verified by diffing the script's output against a bundle produced
+by hand on macOS 27. The result was byte-identical.</p>
+
+<h2>check it yourself</h2>
+<p>The test command — both roots gone, everything else still there:</p>
+<pre><button class="copy" data-copy="openssl crl2pkcs7 -nocrl -certfile /etc/ssl/cert.pem | openssl pkcs7 -print_certs -noout | grep -E 'emSign ECC Root CA - G3|AAA Certificate Services'">copy</button><code>openssl crl2pkcs7 -nocrl -certfile /etc/ssl/cert.pem \
+  | openssl pkcs7 -print_certs -noout \
+  | grep -E 'emSign ECC Root CA - G3|AAA Certificate Services'</code></pre>
+<p>No output, exit code 1 — that is the good result. And the script has its own report:</p>
+<pre class="cmd"><button class="copy" data-copy="curl -fsSL https://surak.github.io/macos-root-ca-cleanup/fix.sh | bash -s -- --verify">copy</button><code><span class="prompt">$</span> curl -fsSL …/fix.sh | bash -s -- --verify</code></pre>
+<pre><code>bundle   /etc/ssl/cert.pem
+  6175 lines, 126 certificates
+  sha256   6bddc1e2bc758979a309b9932ef676f9e166903a27313609bad3a777c0577083
+  backup   /etc/ssl/cert.pem.orig (128 certificates)
+
+the two roots
+  <span class="no">✓</span> emSign ECC Root CA - G3 — not present
+  <span class="no">✓</span> AAA Certificate Services — not present
+
+does the bundle still work?
+  live handshake with the bundle in use:
+  200  0.67s  https://www.apple.com
+  <span class="no">✓</span> openssl parses all 126 certificates</code></pre>
+<p>A real handshake, not a claim: <code>curl</code> against GitHub, Apple, PyPI, Debian, Google and Let's Encrypt
+all returned <code>200</code> with the reduced bundle in place.</p>
+
+<h2>undo</h2>
+<p>The original bundle is never deleted, only parked. This puts it back exactly as Apple shipped it:</p>
+<pre class="cmd"><button class="copy" data-copy="curl -fsSL https://surak.github.io/macos-root-ca-cleanup/fix.sh | bash -s -- --revert">copy</button><code><span class="prompt">$</span> curl -fsSL …/fix.sh | bash -s -- --revert</code></pre>
+
+<h2>the raw commands</h2>
+<p>No taste for <code>curl | bash</code>, and no taste for this script either? These are the four lines it automates.
+Paste them one at a time. The first one alone is the undo.</p>
+<pre><code>[ -e /etc/ssl/cert.pem.orig ] || sudo cp -p /etc/ssl/cert.pem /etc/ssl/cert.pem.orig
+
+t=$(mktemp) &amp;&amp; awk -v s='=== /C=IN/OU=emSign PKI/O=eMudhra Technologies Limited/CN=emSign ECC Root CA - G3' '/^(===|###) /{skip=0} $0==s{skip=1} !skip' /etc/ssl/cert.pem &gt; "$t" &amp;&amp; [ -s "$t" ] &amp;&amp; sudo install -m 0644 -o root -g wheel "$t" /etc/ssl/cert.pem; rm -f "$t"
+
+t=$(mktemp) &amp;&amp; awk -v s='=== /C=GB/ST=Greater Manchester/L=Salford/O=Comodo CA Limited/CN=AAA Certificate Services' '/^(===|###) /{skip=0} $0==s{skip=1} !skip' /etc/ssl/cert.pem &gt; "$t" &amp;&amp; [ -s "$t" ] &amp;&amp; sudo install -m 0644 -o root -g wheel "$t" /etc/ssl/cert.pem; rm -f "$t"
+
+openssl crl2pkcs7 -nocrl -certfile /etc/ssl/cert.pem | openssl pkcs7 -print_certs -noout | grep -E 'emSign ECC Root CA - G3|AAA Certificate Services'</code></pre>
+<p class="note"><strong>One weakness, if you paste them by hand:</strong> <code>[ -s "$t" ]</code> only proves the file is
+not empty. If the subject line ever changes — Apple re-issues a bundle, a DN gets reordered — <code>awk</code> removes nothing,
+the file is still non-empty, and the <code>install</code> silently rewrites the bundle with identical contents.
+Harmless, but you get a success message for a no-op. The script fails loudly in that case instead.</p>
+
+<h2>what is verified, and what is not</h2>
+<p>This page would rather be precise than dramatic, so:</p>
+<table>
+  <tr><th>claim</th><th>status</th></tr>
+  <tr><td>Both roots are present in Apple's <code>/etc/ssl/cert.pem</code></td><td class="ok">verified — 128-certificate bundle, both blocks located by subject and fingerprint</td></tr>
+  <tr><td>Removing them changes nothing else</td><td class="ok">verified — byte-identical to the hand-made bundle, all 126 remaining certificates still parse</td></tr>
+  <tr><td>Nothing breaks</td><td class="ok">verified locally — curl + Python TLS against six major hosts</td></tr>
+  <tr><td>They are revoked</td><td class="bad">not verifiable from the certificates — see below</td></tr>
+</table>
+<p>Root CAs are essentially never revoked through their own CRL: a root cannot sign the list that condemns it, so
+distrust happens out of band, when a trust program drops the root from its store. The AAA CRL is current
+(<code>Last Update: Oct 29 2026</code>) and lists <em>zero</em> entries; the emSign root publishes no CRL or OCSP
+endpoint at all. Neither observation proves or disproves a revocation — the certs themselves cannot tell you.
+On macOS 27, <code>security verify-cert</code> still accepts both, which is consistent with Apple not having withdrawn them.</p>
+<p>So: treat the removal as a deliberate policy decision — <em>these two roots, out of my bundle, on purpose</em> — rather
+than as a cleanup of something the OS already knows is broken. It is reversible, which is the point of doing it this way.
+If you want the authority's side of the story, the sources worth reading are the CA's own incident reports, the
+<a href="https://www.ccadb.org/">CCADB</a> record for each root, and the root-store policy of whichever trust program you care about.</p>
+
+<h2>requirements &amp; risks</h2>
+<ul>
+  <li>macOS. The bundle path and <code>root:wheel</code> ownership are Apple's; nothing here fits Linux.</li>
+  <li><code>sudo</code> for one write to <code>/etc/ssl/cert.pem</code>. The script authenticates against the terminal,
+      so <code>curl | bash</code> works without a password prompt hanging on the pipe.</li>
+  <li>If a service you use genuinely chains to one of these roots, it will start failing after the fix.
+      That is the intended behaviour — and <code>--revert</code> is one command away.</li>
+  <li>macOS updates may restore the bundle. Re-run <code>--verify</code> after a major upgrade; the script is idempotent.</li>
+</ul>
+
+<footer>
+  <span>MIT · no analytics, no cookies, no JavaScript beyond the copy buttons</span>
+  <span><a href="https://github.com/surak/macos-root-ca-cleanup">github.com/surak/macos-root-ca-cleanup</a></span>
+</footer>
+
+</div>
+<script>
+document.querySelectorAll('.copy').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var text = b.getAttribute('data-copy');
+    var done = function () {
+      var old = b.textContent;
+      b.textContent = 'copied'; b.classList.add('done');
+      setTimeout(function () { b.textContent = old; b.classList.remove('done'); }, 1400);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, done);
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta); done();
+    }
+  });
+});
+</script>
+</body>
+</html>
