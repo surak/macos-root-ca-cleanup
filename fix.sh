@@ -32,7 +32,7 @@ case "${1:-}" in
   --verify|-v) MODE=verify ;;
   --revert|-r) MODE=revert ;;
   --help|-h)
-    sed -n '2,14p' "$0" 2>/dev/null | sed 's/^#  \{0,1\}//'
+    sed -n '2,14p' "$0" 2>/dev/null | sed 's/^# \{0,2\}//'
     exit 0 ;;
   "") ;;
   *) printf 'unknown option: %s (try --help)\n' "$1" >&2; exit 2 ;;
