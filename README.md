@@ -22,6 +22,21 @@ Both are self-signed roots that nothing above them vouches for. Removing them fr
 a policy decision you make on purpose — see the "what is verified, and what is not" section of
 the page for exactly which claims are checked and which are not.
 
+## Apple's side
+
+macOS has two trust stores and Apple maintains one of them:
+
+| store | roots | maintained | read by |
+|---|---|---|---|
+| `SystemRootCertificates.keychain` | 158 | yes, updated with the OS, listed in [Apple's root certificate list](https://support.apple.com/en-us/103272) | Safari, anything using `SecTrust` |
+| `/etc/ssl/cert.pem` | 128 | no — first line is `# $OpenBSD: cert.pem,v 1.22.2.1 2021/09/30` | `curl`, `git`, `python3`, `ruby`, `perl`, `/usr/bin/openssl` |
+
+`security add-trusted-cert` / `remove-trusted-cert` only edit keychain trust settings, and `curl`
+reports `CApath: none` — it never asks the Keychain. No man page on macOS mentions
+`/etc/ssl/cert.pem` at all. Nothing Apple ships edits that file on your behalf, which is why this
+script exists; and as of macOS 27.0.1 both roots are still in Apple's Keychain, so Apple has not
+withdrawn either one.
+
 ## What it does
 
 1. Verifies platform, bundle path, certificate count.

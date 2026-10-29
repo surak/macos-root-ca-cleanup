@@ -117,6 +117,85 @@
 they are trusted because they are in the bundle, and for no other reason. One of them, AAA Certificate Services,
 still carries a <span class="yes">SHA-1</span> self-signature from 2004.</p>
 
+<h2>Apple's answer: do it yourself</h2>
+<h3>Two trust stores. Apple maintains one of them.</h3>
+
+<p>macOS does not have one list of trusted roots. It has two, and they are not the same list:</p>
+
+<table>
+  <tr><th>store</th><th>roots</th><th>maintained by Apple</th><th>who trusts through it</th></tr>
+  <tr>
+    <td><code>SystemRootCertificates.keychain</code></td>
+    <td>158</td>
+    <td class="ok">yes — shipped and updated with the OS, and published in
+      <a href="https://support.apple.com/en-us/103272">Apple's root certificate list</a></td>
+    <td>Safari, Mail, App Store, anything that calls <code>SecTrust</code> — the Keychain</td>
+  </tr>
+  <tr>
+    <td><code>/etc/ssl/cert.pem</code></td>
+    <td>128</td>
+    <td class="bad">no — a vendored file, and its own first line says so</td>
+    <td><code>curl</code>, <code>git</code>, <code>python3</code>, <code>ruby</code>, <code>perl</code>, <code>/usr/bin/openssl</code></td>
+  </tr>
+</table>
+
+<p>The second file does not even pretend to be a copy of the first — 128 roots against 158. Its first line is still the
+version-control tag it arrived with:</p>
+
+<pre><code>$ head -1 /etc/ssl/cert.pem
+# $OpenBSD: cert.pem,v 1.22.2.1 2021/09/30 18:28:20 deraadt Exp $</code></pre>
+
+<p>An OpenBSD revision from <strong>30 September 2021</strong>, inside macOS 27. Whatever has changed in Apple's trust store
+since then — and a great deal has — did not necessarily reach this file.</p>
+
+<h3>Nothing Apple ships will edit it for you</h3>
+
+<p>Apple does provide trust tooling, and it is documented in <code>man security</code>: <code>add-trusted-cert</code>,
+<code>remove-trusted-cert</code>, <code>verify-cert</code>. All three operate on <em>trust settings in a keychain</em>.
+Running <code>security remove-trusted-cert</code> against either of these roots would change nothing for <code>curl</code>:</p>
+
+<pre><code>$ curl -v https://example.com 2&gt;&amp;1 | grep CA
+*  CAfile: /etc/ssl/cert.pem
+*  CApath: none</code></pre>
+
+<p><code>CApath: none</code> — there is no second place to look. <code>curl</code> never asks the Keychain, so a root can be
+distrusted in the Keychain and still be trusted by <code>curl</code>, <code>git</code> and every Python script on the machine.</p>
+
+<p>And the file is undocumented: no man page on macOS mentions it.</p>
+
+<pre><code>$ grep -rl 'etc/ssl/cert.pem' /usr/share/man
+$
+</code></pre>
+
+<p>So "do it yourself" is not a rhetorical flourish — it is the operating model. No preference pane, no
+<code>security</code> subcommand, no OS update path exists that removes a root from this particular file on your behalf.
+Apple ships it, five of its own command-line tools read it, and who gets to decide what is in it is you. That is the
+entire justification for a script that edits it — and for the backup it keeps.</p>
+
+<p class="note"><strong>Worth saying plainly:</strong> as of macOS 27.0.1, <em>both</em> roots are still in Apple's 158-root
+Keychain, and <code>security verify-cert</code> still validates them. Apple has not withdrawn either one from anywhere.
+This page does not exist because the OS is about to break — it exists because the decision was left on the table.</p>
+
+<h3>Which tools Apple did not fix</h3>
+<p>Each of these was asked where it looks for trust anchors, on this machine. This is their own answer, not a guess:</p>
+
+<table>
+  <tr><th>tool</th><th>trust source it reports</th><th>affected</th></tr>
+  <tr><td><code>curl</code> 8.7.1 (LibreSSL 3.3.6)</td><td><code>CAfile: /etc/ssl/cert.pem</code> · <code>CApath: none</code></td><td class="yes">yes</td></tr>
+  <tr><td><code>git</code> <span class="badge">GIT_TRACE_CURL</span></td><td><code>CAfile: /etc/ssl/cert.pem</code></td><td class="yes">yes</td></tr>
+  <tr><td><code>/usr/bin/python3</code> (LibreSSL 2.8.3)</td><td><code>openssl_cafile=/private/etc/ssl/cert.pem</code></td><td class="yes">yes</td></tr>
+  <tr><td><code>ruby</code> (LibreSSL 3.3.6)</td><td><code>OpenSSL::X509::DEFAULT_CERT_FILE=/private/etc/ssl/cert.pem</code></td><td class="yes">yes</td></tr>
+  <tr><td><code>perl</code> · IO::Socket::SSL</td><td><code>SSL_ca_file /private/etc/ssl/cert.pem</code></td><td class="yes">yes</td></tr>
+  <tr><td><code>/usr/bin/openssl</code> (LibreSSL 3.3.6)</td><td><code>OPENSSLDIR: "/private/etc/ssl"</code></td><td class="yes">yes</td></tr>
+  <tr><td>Node.js</td><td>118 roots compiled into the binary — never reads the file</td><td class="no">no</td></tr>
+  <tr><td>Homebrew <code>openssl@3</code></td><td><code>OPENSSLDIR: "/opt/homebrew/etc/openssl@3"</code></td><td class="no">no</td></tr>
+</table>
+
+<p><code>/private/etc</code> is where <code>/etc</code> really lives on macOS — same file. Node is the interesting
+exception, and the reason this page can be precise: it carries its own bundle, so it is unaffected either way. If you
+use Homebrew's toolchain, those binaries consult Homebrew's own store and this script does not touch them; to cover
+those, set <code>SSL_CERT_FILE</code> or fix Homebrew's <code>cert.pem</code> the same way.</p>
+
 <h2>what it does</h2>
 <ol class="steps">
   <li><strong>Checks the ground first.</strong> Confirms macOS, finds the bundle, works out how many certificates are in it.</li>
@@ -195,7 +274,8 @@ Harmless, but you get a success message for a no-op. The script fails loudly in 
 distrust happens out of band, when a trust program drops the root from its store. The AAA CRL is current
 (<code>Last Update: Oct 29 2026</code>) and lists <em>zero</em> entries; the emSign root publishes no CRL or OCSP
 endpoint at all. Neither observation proves or disproves a revocation — the certs themselves cannot tell you.
-On macOS 27, <code>security verify-cert</code> still accepts both, which is consistent with Apple not having withdrawn them.</p>
+On macOS 27.0.1, <code>security verify-cert</code> still accepts both, and both are still present in the 158-root
+<code>SystemRootCertificates.keychain</code> — Apple has not withdrawn them, from either store.</p>
 <p>So: treat the removal as a deliberate policy decision — <em>these two roots, out of my bundle, on purpose</em> — rather
 than as a cleanup of something the OS already knows is broken. It is reversible, which is the point of doing it this way.
 If you want the authority's side of the story, the sources worth reading are the CA's own incident reports, the
